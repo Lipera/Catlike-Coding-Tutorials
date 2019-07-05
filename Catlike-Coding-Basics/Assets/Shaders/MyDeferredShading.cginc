@@ -11,6 +11,11 @@ sampler2D _CameraGBufferTexture2;
 
 float4 _LightColor, _LightDir;
 
+//Only define variable for directional lights since UnityShadowLibrary already defines it for point and spotlights
+#if defined (SHADOWS_SCREEN) 
+    sampler2D _ShadowMapTexture;
+#endif
+
 struct appdata {
     float4 vertex : POSITION;
     float3 normal : NORMAL;
@@ -22,10 +27,21 @@ struct v2f {
     float3 ray : TEXCOORD1;
 };
 
-UnityLight CreateLight() {
+UnityLight CreateLight(float2 uv, float3 worldPos, float viewZ) {
     UnityLight light;
     light.dir = -_LightDir;
-    light.color = _LightColor.rgb;
+    float shadowAttenuation = 1;
+    #if defined (SHADOWS_SCREEN)
+        shadowAttenuation = tex2D(_ShadowMapTexture, uv).r;
+
+        //Returns distance from shadow center or unmodified view depth depending if on 
+        //Stable or Close Fit mode for shadow cascades
+        float shadowFadeDistance = UnityComputeShadowFadeDistance(worldPos, viewZ); 
+        //Calculate the apropriate fade factor
+        float shadowFade = UnityComputeShadowFade(shadowFadeDistance);
+        shadowAttenuation = saturate(shadowAttenuation + shadowFade);
+    #endif
+    light.color = _LightColor.rgb * shadowAttenuation;
     return light;
 }
 
@@ -55,7 +71,7 @@ float4 frag(v2f i) : SV_Target {
     float3 normal = tex2D(_CameraGBufferTexture2, uv).rgb * 2 - 1;
     float oneMinusReflectivity = 1 - SpecularStrength(specularTint); //function extracts strongest color component
 
-    UnityLight light = CreateLight();
+    UnityLight light = CreateLight(uv, worldPos, viewPos.z);
     UnityIndirect indirectLight;
     indirectLight.diffuse = 0;
     indirectLight.specular = 0;
