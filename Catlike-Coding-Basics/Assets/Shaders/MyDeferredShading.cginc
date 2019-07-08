@@ -12,7 +12,13 @@ sampler2D _CameraGBufferTexture2;
 
 float4 _LightColor, _LightDir, _LightPos;
 
-sampler2D _LightTexture0, _LightTextureB0; //cookie and distance attenuation textures
+#if defined(POINT_COOKIE)
+    samplerCUBE _LightTexture0; //cookie texture
+#else
+    sampler2D _LightTexture0; //cookie texture
+#endif
+
+sampler2D _LightTextureB0; //distance attenuation texture
 float4x4 unity_WorldToLight;
 float _LightAsQuad; //Unity variable to tell if we should vertex normals or position, i.e. if it is a full-screen quad light or not
 
@@ -60,16 +66,27 @@ UnityLight CreateLight(float2 uv, float3 worldPos, float viewZ) {
             (dot(lightVec, lightVec) * _LightPos.w).rr
         ).UNITY_ATTEN_CHANNEL; //Channel to extract light range that varies per platform
 
-        float4 uvCookie = mul(unity_WorldToLight, float4(worldPos, 1));
-        uvCookie.xy /= uvCookie.w; //perspective transformation needs to be converted
-        attenuation *= tex2Dbias(_LightTexture0, float4(uvCookie.xy, 0, -8)).w; 
-        attenuation *= uvCookie.w < 0; //we only want forward light cone
+        #if defined(SPOT)
+            float4 uvCookie = mul(unity_WorldToLight, float4(worldPos, 1));
+            uvCookie.xy /= uvCookie.w; //perspective transformation needs to be converted
+            attenuation *= tex2Dbias(_LightTexture0, float4(uvCookie.xy, 0, -8)).w; 
+            attenuation *= uvCookie.w < 0; //we only want forward light cone
 
-        #if defined(SHADOWS_DEPTH)
-            shadowed = true;
-            shadowAttenuation = UnitySampleShadowmap(
-                mul(unity_WorldToShadow[0], float4(worldPos, 1)) //first matrix in unity_WorldToShadow converts world to shadow
-            );
+            #if defined(SHADOWS_DEPTH)
+                shadowed = true;
+                shadowAttenuation = UnitySampleShadowmap(
+                    mul(unity_WorldToShadow[0], float4(worldPos, 1)) //first matrix in unity_WorldToShadow converts world to shadow
+                );
+            #endif
+        #else
+            #if defined(POINT_COOKIE)
+                float3 uvCookie = mul(unity_WorldToLight, float4(worldPos, 1)).xyz;
+                attenuation *= texCUBEbias(_LightTexture0, float4(uvCookie, -8)).w;
+            #endif
+            #if defined(SHADOWS_CUBE)
+                shadowed = true;
+                shadowAttenuation = UnitySampleShadowmap(-lightVec);
+            #endif
         #endif
 
     #endif
@@ -80,6 +97,17 @@ UnityLight CreateLight(float2 uv, float3 worldPos, float viewZ) {
         float shadowFadeDistance = UnityComputeShadowFadeDistance(worldPos, viewZ); 
         //Calculate the apropriate fade factor
         float shadowFade = UnityComputeShadowFade(shadowFadeDistance);
+
+        //Optimization to not sample shadows of fragments that end up beyond the shadow fade distance
+        //This is done only for shadows that require multiple texture samples which is the case for soft spotlight and point light shadows
+        //Branching can only be used by certain platforms so it is wrapped accordingly
+        #if defined(UNITY_FAST_COHERENT_DYNAMIC_BRANCHING) && defined(SHADOWS_SOFT)
+            UNITY_BRANCH
+            if(shadowFade > 0.99) {
+                shadowAttenuation = 1;
+            }
+        #endif
+
         shadowAttenuation = saturate(shadowAttenuation + shadowFade);
     }
 
