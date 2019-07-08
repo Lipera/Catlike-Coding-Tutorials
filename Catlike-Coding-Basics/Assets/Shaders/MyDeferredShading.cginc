@@ -10,10 +10,11 @@ sampler2D _CameraGBufferTexture0;
 sampler2D _CameraGBufferTexture1;
 sampler2D _CameraGBufferTexture2;
 
-float4 _LightColor, _LightDir;
+float4 _LightColor, _LightDir, _LightPos;
 
-sampler2D _LightTexture0; //cookie texture
+sampler2D _LightTexture0, _LightTextureB0; //cookie and distance attenuation textures
 float4x4 unity_WorldToLight;
+float _LightAsQuad; //Unity variable to tell if we should vertex normals or position, i.e. if it is a full-screen quad light or not
 
 //Only define variable for directional lights since UnityShadowLibrary already defines it for point and spotlights
 #if defined (SHADOWS_SCREEN) 
@@ -33,26 +34,47 @@ struct v2f {
 
 UnityLight CreateLight(float2 uv, float3 worldPos, float viewZ) {
     UnityLight light;
-    light.dir = -_LightDir;
     float attenuation = 1;
     float shadowAttenuation = 1;
+    bool shadowed = false;
 
-    #if defined(DIRECTIONAL_COOKIE)
-        float2 uvCookie = mul(unity_WorldToLight, float4(worldPos, 1)).xy;
-        //Bias applied to avoid artifacts on geometry edges. Check http://aras-p.info/blog/2010/01/07/screenspace-vs-mip-mapping/ for more info 
-        attenuation *= tex2Dbias(_LightTexture0, float4(uvCookie, 0, -8)).w; 
+    #if defined(DIRECTIONAL) || defined(DIRECTIONAL_COOKIE)
+        light.dir = -_LightDir;
+
+        #if defined(DIRECTIONAL_COOKIE)
+            float2 uvCookie = mul(unity_WorldToLight, float4(worldPos, 1)).xy;
+            //Bias applied to avoid artifacts on geometry edges. Check http://aras-p.info/blog/2010/01/07/screenspace-vs-mip-mapping/ for more info 
+            attenuation *= tex2Dbias(_LightTexture0, float4(uvCookie, 0, -8)).w; 
+        #endif
+
+        #if defined (SHADOWS_SCREEN)
+            shadowed = true;
+            shadowAttenuation = tex2D(_ShadowMapTexture, uv).r;
+        #endif
+    #else
+        float3 lightVec = _LightPos.xyz - worldPos;
+        light.dir = normalize(lightVec);
+
+        attenuation *= tex2D(
+            _LightTextureB0,
+            (dot(lightVec, lightVec) * _LightPos.w).rr
+        ).UNITY_ATTEN_CHANNEL; //Channel to extract light range that varies per platform
+
+        float4 uvCookie = mul(unity_WorldToLight, float4(worldPos, 1));
+        uvCookie.xy /= uvCookie.w; //perspective transformation needs to be converted
+        attenuation *= tex2Dbias(_LightTexture0, float4(uvCookie.xy, 0, -8)).w; 
+        attenuation *= uvCookie.w < 0; //we only want forward light cone
     #endif
 
-    #if defined (SHADOWS_SCREEN)
-        shadowAttenuation = tex2D(_ShadowMapTexture, uv).r;
-
+    if(shadowed) {
         //Returns distance from shadow center or unmodified view depth depending if on 
         //Stable or Close Fit mode for shadow cascades
         float shadowFadeDistance = UnityComputeShadowFadeDistance(worldPos, viewZ); 
         //Calculate the apropriate fade factor
         float shadowFade = UnityComputeShadowFade(shadowFadeDistance);
         shadowAttenuation = saturate(shadowAttenuation + shadowFade);
-    #endif
+    }
+
     light.color = _LightColor.rgb * (attenuation * shadowAttenuation);
     return light;
 }
@@ -61,7 +83,11 @@ v2f vert(appdata v) {
     v2f i;
     i.pos = UnityObjectToClipPos(v.vertex);
     i.uv = ComputeScreenPos(i.pos);
-    i.ray = v.normal;
+    i.ray = lerp(
+        UnityObjectToViewPos(v.vertex) * float3(-1, -1, 1),
+        v.normal,
+        _LightAsQuad
+    );
     return i;
 }
 
@@ -102,7 +128,7 @@ float4 frag(v2f i) : SV_Target {
     #if !defined(UNITY_HDR_ON)
         color = exp2(-color);
     #endif
-    
+
     return color;
 }
 

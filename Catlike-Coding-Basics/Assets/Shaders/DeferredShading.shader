@@ -5,8 +5,6 @@
     SubShader {
         Pass {
             Blend [_SrcBlend] [_DstBlend] //blend variable to support both LDR and HDR
-            Cull Off
-            ZTest Always
             ZWrite Off
 
             CGPROGRAM
