@@ -5,11 +5,15 @@
 
 UNITY_DECLARE_DEPTH_TEXTURE(_CameraDepthTexture);
 
+//Gbuffers for deferred rendering
 sampler2D _CameraGBufferTexture0;
 sampler2D _CameraGBufferTexture1;
 sampler2D _CameraGBufferTexture2;
 
 float4 _LightColor, _LightDir;
+
+sampler2D _LightTexture0; //cookie texture
+float4x4 unity_WorldToLight;
 
 //Only define variable for directional lights since UnityShadowLibrary already defines it for point and spotlights
 #if defined (SHADOWS_SCREEN) 
@@ -30,7 +34,15 @@ struct v2f {
 UnityLight CreateLight(float2 uv, float3 worldPos, float viewZ) {
     UnityLight light;
     light.dir = -_LightDir;
+    float attenuation = 1;
     float shadowAttenuation = 1;
+
+    #if defined(DIRECTIONAL_COOKIE)
+        float2 uvCookie = mul(unity_WorldToLight, float4(worldPos, 1)).xy;
+        //Bias applied to avoid artifacts on geometry edges. Check http://aras-p.info/blog/2010/01/07/screenspace-vs-mip-mapping/ for more info 
+        attenuation *= tex2Dbias(_LightTexture0, float4(uvCookie, 0, -8)).w; 
+    #endif
+
     #if defined (SHADOWS_SCREEN)
         shadowAttenuation = tex2D(_ShadowMapTexture, uv).r;
 
@@ -41,7 +53,7 @@ UnityLight CreateLight(float2 uv, float3 worldPos, float viewZ) {
         float shadowFade = UnityComputeShadowFade(shadowFadeDistance);
         shadowAttenuation = saturate(shadowAttenuation + shadowFade);
     #endif
-    light.color = _LightColor.rgb * shadowAttenuation;
+    light.color = _LightColor.rgb * (attenuation * shadowAttenuation);
     return light;
 }
 
@@ -87,6 +99,10 @@ float4 frag(v2f i) : SV_Target {
         indirectLight
     );
 
+    #if !defined(UNITY_HDR_ON)
+        color = exp2(-color);
+    #endif
+    
     return color;
 }
 
