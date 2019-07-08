@@ -64,6 +64,14 @@ UnityLight CreateLight(float2 uv, float3 worldPos, float viewZ) {
         uvCookie.xy /= uvCookie.w; //perspective transformation needs to be converted
         attenuation *= tex2Dbias(_LightTexture0, float4(uvCookie.xy, 0, -8)).w; 
         attenuation *= uvCookie.w < 0; //we only want forward light cone
+
+        #if defined(SHADOWS_DEPTH)
+            shadowed = true;
+            shadowAttenuation = UnitySampleShadowmap(
+                mul(unity_WorldToShadow[0], float4(worldPos, 1)) //first matrix in unity_WorldToShadow converts world to shadow
+            );
+        #endif
+
     #endif
 
     if(shadowed) {
